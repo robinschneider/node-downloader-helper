@@ -35,7 +35,7 @@ interface BaseStats {
 
 interface DownloadInfoStats extends BaseStats {
   /** if the download is a resume */
-  isResumed: boolean; 
+  isResumed: boolean;
 }
 
 interface DownloadEndedStats extends BaseStats {
@@ -76,7 +76,7 @@ interface DownloadEvents {
   /** The same as progress but emits every 1 second while is downloading */
   "progress.throttled": (stats: Stats) => any;
   /** Emitted when the download fails and retry is enabled */
-  retry: (attempt: any, retryOptions: RetryOptions) => any;
+  retry: (attempt: any, retryOptions: RetryOptions, error: Error | null) => any;
   /** Emitted when the downloading has finished */
   end: (stats: DownloadEndedStats) => any;
   /** Emitted when there is any error */
@@ -97,7 +97,11 @@ interface DownloadEvents {
 type FilenameCallback = (fileName: string, filePath: string) => string;
 interface FilenameDefinition {
   name: string;
-  ext: string;
+  /** The extension of the file. It may be a boolean: `true` will use the `name` property as the full file name (including the extension),
+  `false` will keep the extension of the downloaded file.
+  
+  (default:false) */
+  ext?: string | boolean;
 }
 interface RetryOptions {
   maxRetries: number;
@@ -122,7 +126,7 @@ interface DownloaderHelperOptions {
   removeOnStop?: boolean;
   /** remove the file when fail (default:true) */
   removeOnFail?: boolean;
-  /** Behavior when local file already exists */
+  /** Behavior when local file already exists (default:false)*/
   override?: boolean | OverrideOptions;
   /** Override the http request options */
   httpRequestOptions?: object;
@@ -230,7 +234,7 @@ export class DownloaderHelper extends EventEmitter {
    * @memberof DownloaderHelper
    */
   getTotalSize(): Promise<{ name: string; total: number }>;
-  
+
   /**
    * Subscribes to events
    * 

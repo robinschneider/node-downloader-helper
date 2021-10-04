@@ -1,6 +1,6 @@
 {
   "name": "@hgouveia/node-downloader-helper",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "A simple http file downloader for node.js",
   "main": "./dist/index.js",
   "types": "./types/index.d.ts",
@@ -35,6 +35,9 @@
   "license": "MIT",
   "bin": {
     "ndh": "bin/ndh"
+  },
+  "engines": {
+    "node": ">=6.9"
   },
   "devDependencies": {
     "@types/node": "^14.14.31",
