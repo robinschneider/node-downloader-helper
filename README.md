@@ -32,7 +32,7 @@ For a more complete example check [example](example/) folder
 
 ```javascript
 const { DownloaderHelper } = require('node-downloader-helper');
-const dl = new DownloaderHelper('http://www.ovh.net/files/1Gio.dat', __dirname);
+const dl = new DownloaderHelper('https://proof.ovh.net/files/1Gb.dat', __dirname);
 
 dl.on('end', () => console.log('Download Completed'))
 dl.start();
@@ -57,6 +57,7 @@ these are the default values
 
 ```javascript
 {
+    body: null, //  Request body, can be any, string, object, etc.
     method: 'GET', // Request Method Verb
     headers: {},  // Custom HTTP Header ex: Authorization, User-Agent
     fileName: string|cb(fileName, filePath, contentType)|{name, ext}, // Custom filename when saved
@@ -69,6 +70,21 @@ these are the default values
     httpRequestOptions: {}, // Override the http request options  
     httpsRequestOptions: {}, // Override the https request options, ex: to add SSL Certs
 }
+```
+for `body` you can provide any parameter accepted by http.request write function `req.write(body)` https://nodejs.org/api/http.html, when using this, you might need to add the `content-length` and `content-type` header in addition with the http method `POST` or `PUT`
+
+ex: 
+```javascript
+const data = JSON.stringify({
+  todo: 'Buy the milk'
+});
+const dl = new DownloaderHelper('my_url', __dirname, { 
+method: 'POST',
+body: data,
+headers: {
+    'Content-Type': 'application/json',
+    'Content-Length': data.length
+} } );
 ```
 
 for `fileName` you can provide 3 types of parameter
@@ -124,7 +140,7 @@ for `httpsRequestOptions` the available options are detailed in here https://nod
 event **skip** `skipInfo` object
 ```javascript
 {
-    totalSize:, // total file size got from the server
+    totalSize:, // total file size got from the server (will be set as 'null' if content-length header is not available)
     fileName:, // original file name
     filePath:, // original path name
     downloadedSize:, // the downloaded amount
@@ -134,7 +150,7 @@ event **skip** `skipInfo` object
 event **download** `downloadInfo` object
 ```javascript
 {
-    totalSize:, // total file size got from the server
+    totalSize:, // total file size got from the server (will be set as 'null' if content-length header is not available)
     fileName:, // assigned name
     filePath:, // download path
     isResumed:, // if the download is a resume,
@@ -146,9 +162,9 @@ event **progress** or **progress.throttled** `stats` object
 ```javascript
 {
     name:, // file name
-    total:, // total size that needs to be downloaded in bytes
+    total:, // total size that needs to be downloaded in bytes, (will be set as 'null' if content-length header is not available)
     downloaded:, // downloaded size in bytes
-    progress:, // progress porcentage 0-100%
+    progress:, // progress porcentage 0-100%, (will be set as 0 if total is null)
     speed: // download speed in bytes
 }
 ```
@@ -158,8 +174,8 @@ event **end** `downloadInfo` object
 {
     fileName:, 
     filePath:,
-    totalSize:, // total file size got from the server
-    incomplete:, // true/false if the download endend but still incomplete
+    totalSize:, // total file size got from the server, (will be set as 'null' if content-length header is not available)
+    incomplete:, // true/false if the download endend but still incomplete, set as 'false' if totalSize is null
     onDiskSize, // total size of file on the disk
     downloadedSize:, // the total size downloaded
 }

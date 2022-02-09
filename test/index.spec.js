@@ -1,9 +1,9 @@
 const fs = require('fs');
-const http = require('http');
+const https = require('https');
 const { join } = require('path');
 const { homedir } = require('os');
 const { expect } = require('chai');
-const { DownloaderHelper } = require('../dist');
+const { DownloaderHelper } = require('../src');
 
 jest.mock('fs');
 jest.mock('http');
@@ -24,11 +24,12 @@ function getRequestFn(requestOptions) {
             on: jest.fn(),
             end: jest.fn(),
             abort: jest.fn(),
+            write: jest.fn(),
         };
     };
 }
 
-const downloadURL = 'http://www.ovh.net/files/1Gio.dat'; // http://www.ovh.net/files/
+const downloadURL = 'https://proof.ovh.net/files/1Gb.dat'; // https://proof.ovh.net/files/
 describe('DownloaderHelper', function () {
 
     describe('constructor', function () {
@@ -160,7 +161,7 @@ describe('DownloaderHelper', function () {
             const contentType = 'application/zip';
 
             fs.createWriteStream.mockReturnValue({ on: jest.fn() });
-            http.request.mockImplementation(getRequestFn({
+            https.request.mockImplementation(getRequestFn({
                 statusCode: 200,
                 headers: {
                     'content-type': contentType,
@@ -207,6 +208,16 @@ describe('DownloaderHelper', function () {
             expect(result).to.be.equal(newFileName + '.' + newFilenameExt);
         });
 
+        it("should rename the file name and custom extension when a object is passed in the 'fileName' opts with 'name' and string 'ext' attr", function () {
+            const newFileName = 'mynewname';
+            const newFilenameExt = '7z';
+            const dl = new DownloaderHelper(downloadURL, __dirname, {
+                fileName: { name: newFileName, ext: newFilenameExt }
+            });
+            const result = dl.__getFileNameFromOpts(fileName);
+            expect(result).to.be.equal(newFileName + '.' + newFilenameExt);
+        });
+
         it("should rename the full file name when a object is passed in the 'fileName' opts with 'name' and true in 'ext' attr", function () {
             const newFileName = 'mynewname.7z';
             const dl = new DownloaderHelper(downloadURL, __dirname, {
@@ -214,6 +225,14 @@ describe('DownloaderHelper', function () {
             });
             const result = dl.__getFileNameFromOpts(fileName);
             expect(result).to.be.equal(newFileName);
+        });
+
+    });
+
+    describe('__getFileNameFromHeaders', function () {
+        beforeEach(function () {
+            fs.existsSync.mockReturnValue(true);
+            fs.statSync.mockReturnValue({ isDirectory: () => true });
         });
 
         it("should append '.html' to a file if there is no 'content-disposition' header and no 'path'", function () {
@@ -258,6 +277,74 @@ describe('DownloaderHelper', function () {
                 'content-disposition': 'Content-Disposition: attachment; filename="' + newFileName + '"',
             });
             expect(result).to.be.equal(expectedFileName);
+        });
+
+        it("should parse all 'content-disposition' headers", function () {
+            const dl = new DownloaderHelper('https://google.com/', __dirname);
+
+            const tests = [
+                // eslint-disable-next-line quotes
+                { header: `attachment; filename="Setup64.exe"; filename*=UTF-8''Setup64.exe`, fileName: 'Setup64.exe' },
+                // eslint-disable-next-line quotes
+                { header: `attachment; filename*=UTF-8''Setup64.exe`, fileName: 'Setup64.exe' },
+                // eslint-disable-next-line quotes
+                { header: `attachment;filename="EURO rates";filename*=utf-8''%e2%82%ac%20rates`, fileName: '%e2%82%ac%20rates' },
+                // eslint-disable-next-line quotes
+                { header: `attachment;filename=EURO rates`, fileName: 'EURO rates' },
+                // eslint-disable-next-line quotes
+                { header: `attachment;filename=EURO rates; filename*=utf-8''%e2%82%ac%20rates`, fileName: '%e2%82%ac%20rates' },
+                // eslint-disable-next-line quotes
+                { header: `attachment; filename*= UTF-8''%e2%82%ac%20rates`, fileName: '%e2%82%ac%20rates' },
+                // eslint-disable-next-line quotes
+                { header: `attachment;filename*=utf-8''%e2%82%ac%20rates;filename="EURO rates"`, fileName: '%e2%82%ac%20rates' },
+                // eslint-disable-next-line quotes
+                { header: `attachment;filename*=utf-8''%e2%82%ac%20rates;filename=EURO rates`, fileName: '%e2%82%ac%20rates' },
+                // eslint-disable-next-line quotes
+                { header: `attachment;filename*=utf-8''%e2%82%ac% 20rates;filename=EURO rates   `, fileName: '%e2%82%ac% 20rates' },
+                // eslint-disable-next-line quotes
+                { header: `attachment;fIlEnAmE=EURO rates`, fileName: 'EURO rates' },
+                // eslint-disable-next-line quotes
+                { header: `attachment; filename*=UTF-8'en'Setup64.exe`, fileName: 'Setup64.exe' },
+            ]
+
+            tests.forEach(x => {
+                expect(dl.__getFileNameFromHeaders({ 'content-disposition': x.header }, null)).to.be.equal(x.fileName)
+            })
+
+        });
+
+    })
+
+    describe('download', function () {
+        it("if the content-length is not present when the download starts, it should return null as totalSize", function (done) {
+            fs.createWriteStream.mockReturnValue({ on: jest.fn() });
+            https.request.mockImplementation(getRequestFn({
+                statusCode: 200,
+                headers: {
+                    'content-type': 'application/zip',
+                }
+            }));
+            const dl = new DownloaderHelper(downloadURL, __dirname);
+            dl.on('download', downloadInfo => {
+                expect(downloadInfo.totalSize).to.be.null;
+                done();
+            });
+            dl.start();
+        });
+
+        it("if the content-length is not present when .getTotalSize() is triggered, should return null as total", function (done) {
+            fs.createWriteStream.mockReturnValue({ on: jest.fn() });
+            https.request.mockImplementation(getRequestFn({
+                statusCode: 200,
+                headers: {
+                    'content-type': 'application/zip',
+                }
+            }));
+            const dl = new DownloaderHelper(downloadURL, __dirname);
+            dl.getTotalSize().then(info => {
+                expect(info.total).to.be.null;
+                done();
+            });
         });
     });
 });

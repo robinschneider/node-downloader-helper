@@ -24,7 +24,7 @@ export enum DH_STATES {
 
 interface BaseStats {
   /** total file size got from the server */
-  totalSize: number;
+  totalSize: number | null;
   /** original file name */
   fileName: string;
   /** original path name */
@@ -113,6 +113,8 @@ interface OverrideOptions {
   skipSmaller?: boolean;
 }
 interface DownloaderHelperOptions {
+  /** parameter accepted by http.request write function req.write(body) (default(null)) */
+  body?: any;
   /** Request Method Verb */
   method?: "GET" | "PUT" | "POST" | "DELETE" | "OPTIONS",
   /** Custom HTTP Header ex: Authorization, User-Agent */
@@ -128,6 +130,8 @@ interface DownloaderHelperOptions {
   removeOnFail?: boolean;
   /** Behavior when local file already exists (default:false)*/
   override?: boolean | OverrideOptions;
+  /** interval time of the 'progress.throttled' event will be emitted (default:1000) */
+  progressThrottle?: number;
   /** Override the http request options */
   httpRequestOptions?: object;
   /** Override the https request options, ex: to add SSL Certs */
@@ -230,10 +234,10 @@ export class DownloaderHelper extends EventEmitter {
   /**
    * Gets the total file size from the server
    *
-   * @returns {Promise<{name:string, total:number}>}
+   * @returns {Promise<{name:string, total:number|null}>}
    * @memberof DownloaderHelper
    */
-  getTotalSize(): Promise<{ name: string; total: number }>;
+  getTotalSize(): Promise<{ name: string; total: number | null }>;
 
   /**
    * Subscribes to events

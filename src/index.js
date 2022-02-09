@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import * as URL from 'url';
+import { URL } from 'url';
 import * as path from 'path';
 import * as http from 'http';
 import * as https from 'https';
@@ -37,6 +37,7 @@ export class DownloaderHelper extends EventEmitter {
         this.url = this.requestURL = url;
         this.state = DH_STATES.IDLE;
         this.__defaultOpts = {
+            body: null,
             retry: false, // { maxRetries: 3, delay: 3000 }
             method: 'GET',
             headers: {},
@@ -270,7 +271,7 @@ export class DownloaderHelper extends EventEmitter {
     /**
      * Gets the total file size from the server
      *
-     * @returns {Promise<{name:string, total:number}>}
+     * @returns {Promise<{name:string, total:number|null}>}
      * @memberof DownloaderHelper
      */
     getTotalSize() {
@@ -278,7 +279,9 @@ export class DownloaderHelper extends EventEmitter {
         return new Promise((resolve, reject) => {
             const request = this.__protocol.request(options, response => {
                 if (this.__isRequireRedirect(response)) {
-                    const redirectedURL = URL.resolve(this.url, response.headers.location);
+                    const redirectedURL = /^https?:\/\//.test(response.headers.location)
+                        ? response.headers.location
+                        : new URL(response.headers.location, this.url).href;
                     const options = this.__getOptions('HEAD', redirectedURL, this.__headers);
                     const request = this.__protocol.request(options, response => {
                         if (response.statusCode !== 200) {
@@ -286,7 +289,7 @@ export class DownloaderHelper extends EventEmitter {
                         }
                         resolve({
                             name: this.__getFileNameFromHeaders(response.headers, response),
-                            total: parseInt(response.headers['content-length'] || 0)
+                            total: parseInt(response.headers['content-length']) || null
                         });
                     })
                     request.end();
@@ -297,7 +300,7 @@ export class DownloaderHelper extends EventEmitter {
                 }
                 resolve({
                     name: this.__getFileNameFromHeaders(response.headers, response),
-                    total: parseInt(response.headers['content-length'] || 0)
+                    total: parseInt(response.headers['content-length']) || null
                 });
             });
             request.end();
@@ -319,6 +322,10 @@ export class DownloaderHelper extends EventEmitter {
         this.__request.on('error', this.__onError(this.__promise.resolve, this.__promise.reject));
         this.__request.on('timeout', this.__onTimeout(this.__promise.resolve, this.__promise.reject));
         this.__request.on('uncaughtException', this.__onError(this.__promise.resolve, this.__promise.reject, true));
+
+        if (this.__opts.body) {
+            this.__request.write(this.__opts.body);
+        }
 
         this.__request.end();
     }
@@ -351,13 +358,15 @@ export class DownloaderHelper extends EventEmitter {
 
             //Stats
             if (!this.__isResumed) {
-                this.__total = parseInt(response.headers['content-length']);
+                this.__total = parseInt(response.headers['content-length']) || null;
                 this.__resetStats();
             }
 
             // Handle Redirects
             if (this.__isRequireRedirect(response)) {
-                const redirectedURL = URL.resolve(this.url, response.headers.location);
+                const redirectedURL = /^https?:\/\//.test(response.headers.location)
+                    ? response.headers.location
+                    : new URL(response.headers.location, this.url).href;
                 this.__isRedirected = true;
                 this.__initProtocol(redirectedURL);
                 return this.__start();
@@ -401,10 +410,11 @@ export class DownloaderHelper extends EventEmitter {
             this.__fileName = this.__filePath.split(path.sep).pop();
             if (fs.existsSync(this.__filePath)) {
                 const downloadedSize = this.__getFilesizeInBytes(this.__filePath);
+                const totalSize = this.__total ? this.__total : 0;
                 if (typeof this.__opts.override === 'object' &&
                     this.__opts.override.skip && (
                         this.__opts.override.skipSmaller ||
-                        downloadedSize >= this.__total)) {
+                        downloadedSize >= totalSize)) {
                     this.emit('skip', {
                         totalSize: this.__total,
                         fileName: this.__fileName,
@@ -498,7 +508,7 @@ export class DownloaderHelper extends EventEmitter {
                         fileName: this.__fileName,
                         filePath: this.__filePath,
                         totalSize: this.__total,
-                        incomplete: this.__downloaded !== this.__total,
+                        incomplete: !this.__total ? false : this.__downloaded !== this.__total,
                         onDiskSize: this.__getFilesizeInBytes(this.__filePath),
                         downloadedSize: this.__downloaded,
                     });
@@ -658,20 +668,37 @@ export class DownloaderHelper extends EventEmitter {
     __getFileNameFromHeaders(headers, response) {
         let fileName = '';
 
+        const fileNameAndEncodingRegExp = /.*filename\*=.*?'.*?'([^"].+?[^"])(?:(?:;)|$)/i // match everything after the specified encoding behind a case-insensitive `filename*=`
+        const fileNameWithQuotesRegExp = /.*filename="(.*?)";?/i // match everything inside the quotes behind a case-insensitive `filename=`
+        const fileNameWithoutQuotesRegExp = /.*filename=([^"].+?[^"])(?:(?:;)|$)/i // match everything immediately after `filename=` that isn't surrounded by quotes and is followed by either a `;` or the end of the string
+
+        const ContentDispositionHeaderExists = headers.hasOwnProperty('content-disposition')
+        const fileNameAndEncodingMatch = !ContentDispositionHeaderExists ? null : headers['content-disposition'].match(fileNameAndEncodingRegExp)
+        const fileNameWithQuotesMatch = (!ContentDispositionHeaderExists || fileNameAndEncodingMatch) ? null : headers['content-disposition'].match(fileNameWithQuotesRegExp)
+        const fileNameWithoutQuotesMatch = (!ContentDispositionHeaderExists || fileNameAndEncodingMatch || fileNameWithQuotesMatch) ? null : headers['content-disposition'].match(fileNameWithoutQuotesRegExp)
+
         // Get Filename
-        if (headers.hasOwnProperty('content-disposition') &&
-            headers['content-disposition'].indexOf('filename=') > -1) {
+        if (ContentDispositionHeaderExists && (fileNameAndEncodingMatch || fileNameWithQuotesMatch || fileNameWithoutQuotesMatch)) {
 
             fileName = headers['content-disposition'];
             fileName = fileName.trim();
-            fileName = fileName.substr(fileName.indexOf('filename=') + 9);
-            fileName = fileName.replace(new RegExp('"', 'g'), '');
+
+            if (fileNameAndEncodingMatch) {
+                fileName = fileNameAndEncodingMatch[1];
+            } else if (fileNameWithQuotesMatch) {
+                fileName = fileNameWithQuotesMatch[1];
+            } else if (fileNameWithoutQuotesMatch) {
+                fileName = fileNameWithoutQuotesMatch[1];
+            }
+
             fileName = fileName.replace(/[/\\]/g, '');
+
         } else {
-            if (path.basename(URL.parse(this.requestURL).pathname).length > 0) {
-                fileName = path.basename(URL.parse(this.requestURL).pathname);
+
+            if (path.basename(new URL(this.requestURL).pathname).length > 0) {
+                fileName = path.basename(new URL(this.requestURL).pathname);
             } else {
-                fileName = `${URL.parse(this.requestURL).hostname}.html`;
+                fileName = `${new URL(this.requestURL).hostname}.html`;
             }
         }
 
@@ -764,22 +791,23 @@ export class DownloaderHelper extends EventEmitter {
         const currentTime = new Date();
         const elaspsedTime = currentTime - this.__statsEstimate.time;
         const throttleElapseTime = currentTime - this.__statsEstimate.throttleTime;
+        const total = this.__total || 0;
 
         if (!receivedBytes) {
             return;
         }
 
         this.__downloaded += receivedBytes;
-        this.__progress = (this.__downloaded / this.__total) * 100;
+        this.__progress = total === 0 ? 0 : (this.__downloaded / total) * 100;
 
         // Calculate the speed every second or if finished
-        if (this.__downloaded === this.__total || elaspsedTime > 1000) {
+        if (this.__downloaded === total || elaspsedTime > 1000) {
             this.__statsEstimate.time = currentTime;
             this.__statsEstimate.bytes = this.__downloaded - this.__statsEstimate.prevBytes;
             this.__statsEstimate.prevBytes = this.__downloaded;
         }
 
-        if (this.__downloaded === this.__total || throttleElapseTime > this.__opts.progressThrottle) {
+        if (this.__downloaded === total || throttleElapseTime > this.__opts.progressThrottle) {
             this.__statsEstimate.throttleTime = currentTime;
             this.emit('progress.throttled', this.getStats());
         }
@@ -809,12 +837,12 @@ export class DownloaderHelper extends EventEmitter {
      * @memberof DownloaderHelper
      */
     __getOptions(method, url, headers = {}) {
-        const urlParse = URL.parse(url);
+        const urlParse = new URL(url);
         const options = {
             protocol: urlParse.protocol,
             host: urlParse.hostname,
             port: urlParse.port,
-            path: urlParse.path,
+            path: urlParse.pathname,
             method: method
         };
 
