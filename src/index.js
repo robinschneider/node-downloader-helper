@@ -34,7 +34,7 @@ export class DownloaderHelper extends EventEmitter {
             return;
         }
 
-        this.url = this.requestURL = url;
+        this.url = this.requestURL = url.trim();
         this.state = DH_STATES.IDLE;
         this.__defaultOpts = {
             body: null,
@@ -50,7 +50,9 @@ export class DownloaderHelper extends EventEmitter {
             progressThrottle: 1000,
             httpRequestOptions: {},
             httpsRequestOptions: {},
+            resumeOnIncomplete: true,
             resumeIfFileExists: false,
+            resumeOnIncompleteMaxRetry: 5,
         };
         this.__opts = Object.assign({}, this.__defaultOpts);
         this.__pipes = [];
@@ -58,6 +60,7 @@ export class DownloaderHelper extends EventEmitter {
         this.__downloaded = 0;
         this.__progress = 0;
         this.__retryCount = 0;
+        this.__resumeRetryCount = 0;
         this.__states = DH_STATES;
         this.__promise = null;
         this.__request = null;
@@ -318,6 +321,7 @@ export class DownloaderHelper extends EventEmitter {
                         const redirectedURL = /^https?:\/\//.test(response.headers.location)
                             ? response.headers.location
                             : new URL(response.headers.location, url).href;
+                        this.__initProtocol(redirectedURL);
                         return getRequest(redirectedURL, this.__getOptions('HEAD', redirectedURL, headers));
                     }
                     if (response.statusCode !== 200) {
@@ -546,7 +550,8 @@ export class DownloaderHelper extends EventEmitter {
         return (this.state !== this.__states.PAUSED &&
             this.state !== this.__states.STOPPED &&
             this.state !== this.__states.RETRY &&
-            this.state !== this.__states.FAILED);
+            this.state !== this.__states.FAILED &&
+            this.state !== this.__states.RESUMED);
     }
 
 
@@ -579,13 +584,22 @@ export class DownloaderHelper extends EventEmitter {
                     return reject(_err);
                 }
                 if (this.__hasFinished()) {
+                    const isIncomplete = !this.__total ? false : this.__downloaded !== this.__total;
+
+                    if (isIncomplete && this.__isResumable && this.__opts.resumeOnIncomplete &&
+                        this.__resumeRetryCount <= this.__opts.resumeOnIncompleteMaxRetry) {
+                        this.__resumeRetryCount++;
+                        this.emit('warning', new Error('uncomplete download, retrying'));
+                        return this.resume();
+                    }
+
                     this.__setState(this.__states.FINISHED);
                     this.__pipes = [];
                     this.emit('end', {
                         fileName: this.__fileName,
                         filePath: this.__filePath,
                         totalSize: this.__total,
-                        incomplete: !this.__total ? false : this.__downloaded !== this.__total,
+                        incomplete: isIncomplete,
                         onDiskSize: this.__getFilesizeInBytes(this.__filePath),
                         downloadedSize: this.__downloaded,
                     });
@@ -665,14 +679,15 @@ export class DownloaderHelper extends EventEmitter {
             return Promise.reject(err);
         }
 
-        if (typeof this.__opts.retry !== 'object' ||
-            !this.__opts.retry.hasOwnProperty('maxRetries') ||
-            !this.__opts.retry.hasOwnProperty('delay')) {
+        if (typeof this.__opts.retry !== 'object') {
             return Promise.reject(new Error('wrong retry options'));
         }
 
+        const retryDelay = this.__opts.retry.delay || 0;
+        const maxRetries = this.__opts.retry.maxRetries || 999;
+
         // reached the maximum retries
-        if (this.__retryCount >= this.__opts.retry.maxRetries) {
+        if (this.__retryCount >= maxRetries) {
             return Promise.reject(err ? err : new Error('reached the maximum retries'));
         }
 
@@ -681,7 +696,7 @@ export class DownloaderHelper extends EventEmitter {
         this.emit('retry', this.__retryCount, this.__opts.retry, err);
 
         return new Promise((resolve) =>
-            setTimeout(() => resolve(this.__downloaded > 0 ? this.resume() : this.__start()), this.__opts.retry.delay)
+            setTimeout(() => resolve(this.__downloaded > 0 ? this.resume() : this.__start()), retryDelay)
         );
     }
 
@@ -728,6 +743,7 @@ export class DownloaderHelper extends EventEmitter {
         this.__retryCount = 0;
         this.__downloaded = 0;
         this.__progress = 0;
+        this.__resumeRetryCount = 0;
         this.__statsEstimate = {
             time: 0,
             bytes: 0,
@@ -966,7 +982,7 @@ export class DownloaderHelper extends EventEmitter {
             throw new Error('URL should be an string');
         }
 
-        if (!url) {
+        if (url.trim() === '') {
             throw new Error("URL couldn't be empty");
         }
 
@@ -974,7 +990,7 @@ export class DownloaderHelper extends EventEmitter {
             throw new Error('Destination Folder should be an string');
         }
 
-        if (!destFolder) {
+        if (destFolder.trim() === '') {
             throw new Error("Destination Folder couldn't be empty");
         }
 
